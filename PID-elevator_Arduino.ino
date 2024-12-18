@@ -8,19 +8,20 @@
 #define PIN_TRIG 2 // HC-SR04 trig pin is connected to D2 pin
 #define PIN_ECHO 3 // HC-SR04 echo pin is connected to D3 pin
 
-#define PIN_IN1 42 // L298N IN1 pin is connected to D42 pin
+#define PIN_IN1 38 // L298N IN1 pin is connected to D42 pin
 #define PIN_IN2 40 // L298N IN2 pin is connected to D40 pin
 #define PIN_ENA 7  // L298N ENA pin is connected to D7 pin
 
-LiquidCrystal lcd(52, 50, 48, 46, 53, 51); // 2x16 LCD Display VSS pin is connected to GND pin
+LiquidCrystal lcd(52, 50, 48, 46, 44, 42); // 2x16 LCD Display VSS pin is connected to GND pin
                                            // 2x16 LCD Display VDD pin is connected to 5V pin
                                            // 2x16 LCD Display V0 pin is connected to 10K pot mid pin
                                            // 2x16 LCD Display RS pin is connected to D52 pin
+                                           // 2x16 LCD Display RW pin is connected to GND pin  
                                            // 2x16 LCD Display E pin is connected to D50 pin
                                            // 2x16 LCD Display D4 pin is connected to D48 pin 
                                            // 2x16 LCD Display D5 pin is connected to D46 pin
-                                           // 2x16 LCD Display D6 pin is connected to D53 pin
-                                           // 2x16 LCD Display D7 pin is connected to D51 pin
+                                           // 2x16 LCD Display D6 pin is connected to D44 pin
+                                           // 2x16 LCD Display D7 pin is connected to D42 pin
                                            // 2x16 LCD Display A pin is connected to 5V pin 
                                            // 2x16 LCD Display K pin is connected to GND pin
 
@@ -28,14 +29,14 @@ LedControl lc = LedControl(11, 12, 13, 1); // 8x8 LED Matrix DIN pin is connecte
                                            // 8x8 LED Matrix CLK pin is connected to D12 pin
                                            // 8x8 LED Matrix CS pin is connected to D13 pin
 
-int target_floor = 0;
-int motor_signal;
+int target_floor = 0; // Target floor number, in the interval of 1-3
+int motor_signal; // Signal to drive the motor, in the interval of 0-255
 
 long duration; // HC-SR04 response duration
 
-unsigned long previous_millis = 0; // Zaman ölçümü için değişken
+unsigned long previous_millis = 0; // Arduino previous runtime, for serial port monitor
 
-const long millis_interval = 400; // 0.4 saniyelik aralık
+const long millis_interval = 500; // Arduino runtime interval, for serial port monitor
 
 float height = 0; // Cabin height
 
@@ -59,15 +60,7 @@ float previous_error_PID = 0.0; // Previous value of error_PID, for PID-controll
 float derivative_PD = 0.0; // Derivative of error_PD, difference between current and previous value of it, with respect to time, for PD-controller
 float derivative_PID = 0.0; // Derivative of error_PID, difference between current and previous value of it, with respect to time, for PID-controller
 
-float motor_voltage;
-
-bool button_pressed = false;
-
-bool is_P_controller = false;
-bool is_I_controller = false;
-bool is_PD_controller = false;
-bool is_PI_controller = false;
-bool is_PID_controller = false;
+float motor_voltage; // Voltage to drive the motor, in the interval of 0-7
 
 void setup()
 {
@@ -97,19 +90,19 @@ void loop()
   {
     target_floor = 1; // target_floor is set to 1, indicating 1. floor
     delay(200); // Wait for debounce of the button
-    button_pressed = true;
+    Serial.println("Button 1 is pressed, target floor is 1"); // Print current state to serial port monitor
   }
   else if (digitalRead(BUTTON_2) == LOW) // If BUTTON_2 is pressed
   {
     target_floor = 2; // target_floor is set to 2, indicating 2. floor
     delay(200); // Wait for debounce of the button
-    button_pressed = true;
+    Serial.println("Button 2 is pressed, target floor is 2"); // Print current state to serial port monitor
   } 
   else if (digitalRead(BUTTON_3) == LOW) // If BUTTON_3 is pressed
   {
     target_floor = 3; // target_floor is set to 3, indicating 3. floor
     delay(200); // Wait for debounce of the button
-    button_pressed = true;
+    Serial.println("Button 3 is pressed, target floor is 3"); // Print current state to serial port monitor
   }
 
   digitalWrite(PIN_TRIG, LOW); // HC-SR04 trig pin is set to LOW
@@ -120,85 +113,43 @@ void loop()
 
   duration = pulseIn(PIN_ECHO, HIGH); // Read HC-SR04 response duration from echo pin in microseconds
 
-  height = duration * 0.03432 / 2; // Calculate the height of the cabin in centimeters, (cabin height) =  ((HC-SR04 response duration) * (sound speed in air)) / 2
+  height = floor(((duration * 0.03432) / 2) * 10) / 10.0; // Calculate the height of the cabin in centimeters, (cabin height) =  ((HC-SR04 response duration) * (sound speed in air)) / 2, and neglect the hundredths place using floor function
   
-  if (height < 25) show_floor_number(1); // If cabin height is less than 25 cm, show 1 on 8x8 LED Matrix, indicatin 1. floor
-  else if (height < 50) show_floor_number(2); // Else if cabin height is less than 50 cm, show 2 on 8x8 LED Matrix, indicating 2. floor
+  if (height < 29.5) show_floor_number(1); // If cabin height is less than 25 cm, show 1 on 8x8 LED Matrix, indicatin 1. floor
+  else if (height < 54.5) show_floor_number(2); // Else if cabin height is less than 50 cm, show 2 on 8x8 LED Matrix, indicating 2. floor
   else show_floor_number(3); // Else, show 3 on 8x8 LED Matrix, indicating 3. floor
 
-  // Read potentiometer values for kP, kD and kI
-  kP = analogRead(A0) / 1023.0 * 10.0; // Scale to 0-10
-  kD = analogRead(A1) / 1023.0 * 10.0; // Scale to 0-10
-  kI = analogRead(A2) / 1023.0 * 10.0; // Scale to 0-10
+  kP = map(analogRead(A0), 0, 1023, 0, 20); // Read potentiometer value for kP in the interval of 0-20
 
-  // Determine control algorithm
-  if (button_pressed == true)
+  float kI_values[] = {0.000, 0.001, 0.002, 0.003, 0.004, 0.005, 0.006, 0.007, 0.008, 0.009};
+  delay(5);
+  analogRead(A1);
+  delay(5);
+  kI = kI_values[map(analogRead(A1), 0, 1023, 0, 10)]; // Read potentiometer value for kI with the elements of kI_values array
+
+  float kD_values[] = {0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9};
+  delay(5);
+  analogRead(A5);
+  delay(5);
+  kD = kD_values[map(analogRead(A5), 0, 1023, 0, 10)]; // Read potentiometer value for kD with the elements of kD_values array
+
+  if (target_floor) // If target_floor variable is not zero or if any button is pressed
   {
-    if (kP == 0 && kD == 0 && kI == 0) ON_OFF_controller((25 * (target_floor - 1)) + 5);
-    else if (kP > 0 && kD == 0 && kI == 0)
-    {
-      P_controller((25 * (target_floor - 1)) + 5);
-      is_P_controller = true;
-    }
-    else if (kP == 0 && kD == 0 && kI > 0)
-    {
-      I_controller((25 * (target_floor - 1)) + 5);
-      is_I_controller = true;
-    }
-    else if (kP > 0 && kD > 0 && kI == 0)
-    {
-      PD_controller((25 * (target_floor - 1)) + 5);
-      is_PD_controller = true;
-    }
-    else if (kP > 0 && kD == 0 && kI > 0)
-    {
-      PI_controller((25 * (target_floor - 1)) + 5);
-      is_PI_controller = true;
-    }
-    else if (kP > 0 && kD > 0 && kI > 0)
-    {
-      PID_controller((25 * (target_floor - 1)) + 5);
-      is_PID_controller = true;
-    }
-    else
-    {
-      lcd.setCursor(0, 1);
-      lcd.print("ERROR        ");
-    }
-
-    button_pressed = false;
+    if (kP == 0 && kD == 0.00 && kI == 0.00) ON_OFF_controller((25 * (target_floor - 1)) + 5); // If kP, kI and kD are all zero, all potentiometerz are at the lowest level, move the cabin using ON-OFF controller
+    else if (kP > 0 && kD == 0.00 && kI == 0.00) P_controller((25 * (target_floor - 1)) + 5); // If kP is not zero while kI and kD are zero, move the cabin using P controller
+    else if (kP == 0 && kD == 0.00 && kI > 0.00) I_controller((25 * (target_floor - 1)) + 5); // If kI is not zero while kP and kD are zero, move the cabin using I controller
+    else if (kP > 0 && kD == 0.00 && kI > 0.00) PI_controller((25 * (target_floor - 1)) + 5); // If kP and kI are not zero while kD is zero, move the cabin using PI controller
+    else if (kP > 0 && kD > 0.00 && kI == 0.00) PD_controller((25 * (target_floor - 1)) + 5); // If kP and kD are not zero while kI is zero, move the cabin using PD controller
+    else if (kP > 0 && kD > 0.00 && kI > 0.00) PID_controller((25 * (target_floor - 1)) + 5); // If kP, kI and kD are all not zero, all potentiometerz are at a level different than the lowest, move the cabin using PID controller
   }
 
-//  if (target_floor == 1)
-//  {
-//        //ON_OFF_CONTROLLER(5);
-//        pController(5);
-//        //piController(5);
-//        //pdController(5);
-//        //pidController(5);
-//  }
-//  else if (target_floor == 2)
-//  {
-//       //ON_OFF_CONTROLLER(30); 
-//       pController(30);
-//       //piController(30);
-//       //pdController(30);
-//       //pidController(30);
-//  }
-//  else if (target_floor == 3)
-//  {
-//        //ON_OFF_CONTROLLER(55);
-//        pController(55);
-//        //piController(55);
-//        //pdController(55);
-//        //pidController(55);
-//  }
+  motor_voltage = (motor_signal * 7.0) / 255.0; // Calculate the motor voltage to drive the motor, in the interval of 0-7
+  
+  unsigned long current_millis = millis(); // Arduino current runtime, for serial port monitor
 
-  unsigned long current_millis = millis();
-
-  if (current_millis - previous_millis >= millis_interval)
+  if (current_millis - previous_millis >= millis_interval) // If Arduino runtime is in the interval of 0.5 seconds, for serial port monitor
   {
-    previous_millis = current_millis; // Time update
+    previous_millis = current_millis; // Arduino runtime update, for serial port monitor
     
     // Print cabin height to serial port monitor
     Serial.print("Height: ");
@@ -210,317 +161,239 @@ void loop()
     Serial.println(target_floor);
 
     // Print gains to serial port monitor
-    Serial.print("kp = ");
-    Serial.print(kP);
-    Serial.print(" | kd = ");
-    Serial.print(kD);
-    Serial.print(" | ki = ");
-    Serial.println(kI);
+    Serial.print("kP = ");
+    Serial.print(int(kP));
+    Serial.print(" | kI = ");
+    Serial.print(int(kI * 1000));
+    Serial.print("x10^(-3)");
+    Serial.print(" | kD = ");
+    Serial.print(int(kD * 10));
+    Serial.println("x10^(-1)");
 
     // Print motor voltage to serial port monitor
     Serial.print("Motor voltage: ");
-    Serial.print((motor_signal * 7) / 255);
+    Serial.print(motor_voltage);
     Serial.println(" V");
 
     // Print motor signal to serial port monitor
     Serial.print("Motor signal: ");
     Serial.println(motor_signal);
-
-    if (is_P_controller == true)
-    {
-      // Print P-controller parameters to serial port monitor
-      Serial.print("P-controller error: ");
-      Serial.println(error_P);
-      // is_P_controller = false;
-    }
-    else if (is_I_controller == true)
-    {
-      // Print I-controller parameters to serial port monitor
-      Serial.print("I-controller error: ");
-      Serial.println(error_I);
-      Serial.print("I-controller integral: ");
-      Serial.println(integral_I);
-      // is_I_controller = false;
-    }
-    else if (is_PD_controller == true)
-    {
-      // Print PD-controller parameters to serial port monitor
-      Serial.print("PD-controller error: ");
-      Serial.println(error_PD);
-      Serial.print("PD-controller derivative: ");
-      Serial.println(derivative_PD);
-      // is_PD_controller = false;
-    }
-    else if (is_PI_controller == true)
-    {
-      // Print PI-controller parameters to serial port monitor
-      Serial.print("PI-controller error: ");
-      Serial.println(error_PI);
-      Serial.print("PI-controller integral: ");
-      Serial.println(integral_PI);
-      // is_PI_controller = false;
-    }
-    else if (is_PID_controller == true)
-    {
-      // Print PID-controller parameters to serial port monitor
-      Serial.print("PID-controller error: ");
-      Serial.println(error_PID);
-      Serial.print("PID-controller integral: ");
-      Serial.println(integral_PID);
-      Serial.print("PID-controller derivative: ");
-      Serial.println(derivative_PID);
-      // is_PID_controller = false;
-    }
+    
     Serial.print("\n");
   }
 
-  update_LCD(height, kP, kI, kD);
+  update_LCD(height, motor_voltage, kP, kI, kD); // Update 2x16 LCD Display with new data of height, motor voltage, kP, kI and kD values
     
-  delay(100);
+  // delay(100);
 }
 
-void update_LCD(float cabin_height, float P_gain, float I_gain, float D_gain)
+void update_LCD(float cabin_height, float voltage, float P_gain, float I_gain, float D_gain) // 2x16 LCD Display function
 {
-  // 1. satıra mesafe yaz
-  lcd.setCursor(0, 0);
-  lcd.print("Height: ");
-  lcd.print(int(cabin_height));
-  lcd.print("cm  "); // "  " boşluk bırakmak eski yazıyı temizler
+  // 1. line
+  lcd.setCursor(0, 0); // Start printing from 1. line 1. character
+  lcd.print("H:");
+  lcd.print(cabin_height);
+  lcd.print(" V:");
+  lcd.print(voltage);
+  lcd.print("   ");
 
-  // 2. satıra PID katsayılarını yaz
-  lcd.setCursor(0, 1);
-  lcd.print("kP=");
+  // 2. line
+  lcd.setCursor(0, 1); // Start printing from 2. line 1. character
   lcd.print(int(P_gain));
-  lcd.print(" kI=");
-  lcd.print(int(I_gain));
-  lcd.print(" kD=");
-  lcd.print(int(D_gain));
-  lcd.print("   "); // Eski yazıyı temizlemek için boşluk
+  lcd.print(" ");
+  lcd.print(int(I_gain * 1000));
+  lcd.print("(-3) ");
+  lcd.print(int(D_gain * 10));
+  lcd.print("(-1)");
+  lcd.print(" ");
 }
 
-// ON-OFF kontrol fonksiyonu
-void ON_OFF_controller(int target_height)
+void ON_OFF_controller(int target_height) // ON-OFF controller function
 {
-  if (height < target_height)
+  if (height < target_height) // If current heighr is less than target height
   {
-    // Motoru ileri yönde çalıştırma
+    // Drive the motor, full power, to lift the cabin
     digitalWrite(PIN_IN1, HIGH);
     digitalWrite(PIN_IN2, LOW);
-    analogWrite(PIN_ENA, 255); // Motoru hızla çalıştırma
+    analogWrite(PIN_ENA, 255);
   }
-  else if (height > target_height)
+  else if (height > target_height) // Else if current height is greater than target height
   {
-    // Motoru geri yönde çalıştırma
+    // Drive the motor, full power, to lower the cabin
     digitalWrite(PIN_IN1, LOW);
     digitalWrite(PIN_IN2, HIGH);
     analogWrite(PIN_ENA, 255); // Motoru hızla çalıştırma
   }
-  else
+  else // Else, if the cabin is at target height
   {
-    // Hedef mesafeye ulaşıldığında motoru durdurma
+    // Do not drive the motor
     digitalWrite(PIN_IN1, LOW);
     digitalWrite(PIN_IN2, LOW);
     analogWrite(PIN_ENA, 0); // Motoru durdurma
   }
+
+  motor_signal = 255; // Signal to drive the motor
 }
 
-// P kontrol fonksiyonu
-void P_controller(int target_height)
+void P_controller(int target_height) // P-controller function
 {
-  error_P = target_height - height;
+  error_P = target_height - height; // P error, difference between target height and current height
   
-  // Hata negatifse motor geri döner, pozitifse ileri gider
-  if (error_P > 0.4)
+  if (error_P > 0.5) // If P error is greater than 0.5
   {
-    // Motoru ileri yönde çalıştırma
+    // Drive the motor to lift the cabin
     digitalWrite(PIN_IN1, HIGH);
     digitalWrite(PIN_IN2, LOW);
   }
-  else if (error_P < 0)
+  else if (error_P < 0) // If P error is less than 0
   {
-    // Motoru geri yönde çalıştırma
+    // Drive the motor to lower the cabin
     digitalWrite(PIN_IN1, LOW);
     digitalWrite(PIN_IN2, HIGH);
   }
-  else
+  else // Else, if the cabin is at or very close to target height
   {
-    // Hedef mesafeye ulaşıldı, motoru durdur
+    // Do not drive the motor
     digitalWrite(PIN_IN1, LOW);
     digitalWrite(PIN_IN2, LOW);
   }
   
-  // Motor gücünü sınırlama (0 ile 255 arasında)
-  motor_signal = constrain(abs(kP * error_P), 0, 255);
+  motor_signal = constrain(abs(kP * error_P), 0, 255); // Calculate the signal by constraining the P equation in the interval of 0-255 to drive the motor
   
-  // Motor hızını ayarla
-  analogWrite(PIN_ENA, motor_signal);
+  analogWrite(PIN_ENA, motor_signal); // Drive the motor
 }
 
-void I_controller(int target_height)
+void I_controller(int target_height) // I-controller function
 {
-  error_I = target_height - height;
+  error_I = target_height - height; // I error, difference between target height and current height
 
-  integral_I += error_I;
+  integral_I += error_I; // I integral, cumulative sum of I error over time
 
-  // Yönü belirle
-  if (error_I > 0.4)
+  if (error_I > 0.5) // If I error is greater than 0.5
   {
+    // Drive the motor to lift the cabin
     digitalWrite(PIN_IN1, HIGH);
     digitalWrite(PIN_IN2, LOW);
   }
-  else if (error_I < 0)
+  else if (error_I < 0) // If I error is less than 0
   {
+    // Drive the motor to lower the cabin
     digitalWrite(PIN_IN1, LOW);
     digitalWrite(PIN_IN2, HIGH);
   }
-  else
+  else // Else, if the cabin is at or very close to target height
   {
+    // Do not drive the motor
     digitalWrite(PIN_IN1, LOW);
     digitalWrite(PIN_IN2, LOW);
   }
 
-  motor_signal = constrain(abs(kI * integral_PI), 0, 255);  // Mutlak değerini al ve sınırlama uygula
+  motor_signal = constrain(abs(kI * integral_PI), 0, 255); // Calculate the signal by constraining the I equation in the interval of 0-255 to drive the motor
 
-  // Motor hızını ayarla
-  analogWrite(PIN_ENA, motor_signal);
+  analogWrite(PIN_ENA, motor_signal); // Drive the motor
 }
 
-// PI kontrol fonksiyonu
-void PI_controller(int target_height)
+void PI_controller(int target_height) // PI-controller function
 {
-  error_PI = target_height - height;
+  error_PI = target_height - height; // PI error, difference between target height and current height
   
-  integral_PI += error_PI;  // Integral, hata üzerinde birikim yapar
+  integral_PI += error_PI; // PI integral, cumulative sum of PID error over time
   
-  // Yönü belirle
-  if (error_PI > 0.4)
+  if (error_PI > 0.5) // If PI error is greater than 0.5
   {
+    // Drive the motor to lift the cabin
     digitalWrite(PIN_IN1, HIGH);
     digitalWrite(PIN_IN2, LOW);
   }
-  else if (error_PI < 0)
+  else if (error_PI < 0) // If PI error is less than 0
   {
+    // Drive the motor to lower the cabin
     digitalWrite(PIN_IN1, LOW);
     digitalWrite(PIN_IN2, HIGH);
   }
-  else
+  else // Else, if the cabin is at or very close to target height
   {
+    // Do not drive the motor
     digitalWrite(PIN_IN1, LOW);
     digitalWrite(PIN_IN2, LOW);
   }
 
-  motor_signal = constrain(abs((kP * error_PI) + (kI * integral_PI)), 0, 255);  // Mutlak değerini al ve sınırlama uygula
+  motor_signal = constrain(abs((kP * error_PI) + (kI * integral_PI)), 0, 255); // Calculate the signal by constraining the PI equation in the interval of 0-255 to drive the motor
   
-  // Motor hızını ayarla
-  analogWrite(PIN_ENA, motor_signal);
-  
-//  // Seri monitöre değerleri yazdır
-//  Serial.print("Hata: ");
-//  Serial.print(error2);
-//  Serial.print(", Integral: ");
-//  Serial.print(integral);
-//  Serial.print(", Motor Gücü: ");
-//  Serial.println(motorPower);
+  analogWrite(PIN_ENA, motor_signal); // Drive the motor
 }
 
-// PD kontrol fonksiyonu
-void PD_controller(int target_height)
+void PD_controller(int target_height) // PD-controller function
 {
-  error_PD = target_height - height;
+  error_PD = target_height - height; // PD error, difference between target height and current height
 
-  derivative_PD = error_PD - previous_error_PD; // Hatanın türevini hesapla
+  derivative_PD = error_PD - previous_error_PD; // PD derivative, difference between current PD error and previous PID error with respect to time
 
-  // Motorun yönünü belirle
-  if (error_PD > 0.4)
+  if (error_PD > 0.5) // If PD error is greater than 0.5
   {
-    digitalWrite(PIN_IN1, HIGH);
-    digitalWrite(PIN_IN2, LOW);  // İleri yönde dön
-  }
-  else if (error_PD < 0)
-  {
-    digitalWrite(PIN_IN1, LOW);
-    digitalWrite(PIN_IN2, HIGH);  // Geri yönde dön
-  }
-  else
-  {
-    digitalWrite(PIN_IN1, LOW);
-    digitalWrite(PIN_IN2, LOW);  // Motoru durdur
-  }
-
-  motor_signal = constrain(abs((kP * error_PD) + (kD * derivative_PD)), 0, 255);  // Mutlak değer alınır
-
-  // Motor hızını ayarla
-  analogWrite(PIN_ENA, motor_signal);
-
-  // Önceki hatayı güncelle
-  previous_error_PD = error_PD;
-
-//  // Seri monitöre değerleri yazdır
-//  Serial.print("Mesafe: ");
-//  Serial.print(height);
-//  Serial.print(" cm, Hata: ");
-//  Serial.print(error3);
-//  Serial.print(", Türev: ");
-//  Serial.print(derivative);
-//  Serial.print(", Motor Gücü: ");
-//  Serial.println(motorPower);
-}
-
-// PID kontrol fonksiyonu
-void PID_controller(int target_height)
-{
-  error_PID = target_height - height;
-
-  integral_PID += error_PID;
-
-  derivative_PID = error_PID - previous_error_PID; // Derivative hesapla (hata değişim oranı)
-
-  // Motor yönünü belirle
-  if (error_PID > 0.4)
-  {
-    // Motor ileri yönde dönmeli
+    // Drive the motor to lift the cabin
     digitalWrite(PIN_IN1, HIGH);
     digitalWrite(PIN_IN2, LOW);
   }
-  else if (error_PID < 0)
+  else if (error_PD < 0) // If PD error is less than 0
   {
-    // Motor geri yönde dönmeli
+    // Drive the motor to lower the cabin
     digitalWrite(PIN_IN1, LOW);
     digitalWrite(PIN_IN2, HIGH);
   }
-  else
+  else // Else, if the cabin is at or very close to target height
   {
-    // Hedefe ulaşıldığında motoru durdur
+    // Do not drive the motor
     digitalWrite(PIN_IN1, LOW);
     digitalWrite(PIN_IN2, LOW);
   }
 
-  motor_signal = constrain(abs((kP * error_PID) + (kI * integral_PID) + (kD * derivative_PID)), 0, 255);
+  motor_signal = constrain(abs((kP * error_PD) + (kD * derivative_PD)), 0, 255); // Calculate the signal by constraining the PD equation in the interval of 0-255 to drive the motor
 
-  // Motor hızını ayarla
-  analogWrite(PIN_ENA, motor_signal);
+  analogWrite(PIN_ENA, motor_signal); // Drive the motor
 
-  // Önceki hatayı güncelle (D terimi için)
-  previous_error_PID = error_PID;
-
-//  // Seri monitöre değerleri yazdır (debugging için)
-//  Serial.print("Mesafe: ");
-//  Serial.print(height);
-//  Serial.print(" cm, Hata: ");
-//  Serial.print(error);
-//  Serial.print(", Integral: ");
-//  Serial.print(integral2);
-//  Serial.print(", Derivative: ");
-//  Serial.print(derivative);
-//  Serial.print(", Motor Gücü: ");
-//  Serial.println(motorPower);
+  previous_error_PD = error_PD; // Update the previous PD error
 }
 
-void show_floor_number(int floor_number)
+void PID_controller(int target_height) // PID-controller function
 {
-  if (floor_number == 1)
+  error_PID = target_height - height; // PID error, difference between target height and current height
+
+  integral_PID += error_PID; // PID integral, cumulative sum of PID error over time
+
+  derivative_PID = error_PID - previous_error_PID; // PID derivative, difference between current PID error and previous PID error with respect to time
+
+  if (error_PID > 0.5) // If PID error is greater than 0.5
   {
-    lc.clearDisplay(0);
+    // Drive the motor to lift the cabin
+    digitalWrite(PIN_IN1, HIGH);
+    digitalWrite(PIN_IN2, LOW);
+  }
+  else if (error_PID < 0) // If PID error is less than 0
+  {
+    // Drive the motor to lower the cabin
+    digitalWrite(PIN_IN1, LOW);
+    digitalWrite(PIN_IN2, HIGH);
+  }
+  else // Else, if the cabin is at or very close to target height
+  {
+    // Do not drive the motor
+    digitalWrite(PIN_IN1, LOW);
+    digitalWrite(PIN_IN2, LOW);
+  }
+
+  motor_signal = constrain(abs((kP * error_PID) + (kI * integral_PID) + (kD * derivative_PID)), 0, 255); // Calculate the signal by constraining the PID equation in the interval of 0-255 to drive the motor
+
+  analogWrite(PIN_ENA, motor_signal); // Drive the motor
+
+  previous_error_PID = error_PID; // Update the previous PID error
+}
+
+void show_floor_number(int floor_number) // 8x8 LED Matrix function
+{
+  if (floor_number == 1) // If BUTTON_1 is pressed, target floor is 1
+  {
+    lc.clearDisplay(0); // Clear the 8x8 LED Matrix display
     
     byte floor_1[8] = {
                       B00000000,
@@ -538,9 +411,9 @@ void show_floor_number(int floor_number)
       lc.setRow(0, i, floor_1[i]);
     }  
   }
-  else if (floor_number == 2)
+  else if (floor_number == 2) // Else if BUTTON_2 is pressed, target floor is 2
   {
-    lc.clearDisplay(0);
+    lc.clearDisplay(0); // Clear the 8x8 LED Matrix display
     
     byte floor_2[8] = {
                       B00000000,
@@ -558,9 +431,9 @@ void show_floor_number(int floor_number)
       lc.setRow(0, i, floor_2[i]);
     }  
   }
-  else if (floor_number == 3)
+  else if (floor_number == 3) // Else if BUTTON_3 is pressed, target floor is 3
   {
-    lc.clearDisplay(0);
+    lc.clearDisplay(0); // Clear the 8x8 LED Matrix display
     
     byte floor_3[8] = {
                       B00000000,
